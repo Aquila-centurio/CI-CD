@@ -1,0 +1,103 @@
+name: CI  # название — отображается в GitHub UI во вкладке Actions
+
+# Триггеры — когда запускать workflow
+on:
+  push:
+    branches: [main]         # при каждом push в main
+  pull_request:
+    branches: [main]         # при открытии PR в main
+
+jobs:
+
+  # ── JOB 1: тесты ────────────────────────────────────────────
+  test:
+    name: Lint and Test
+    runs-on: ubuntu-latest   # бесплатная VM от GitHub
+
+    steps:
+      # Клонировать репозиторий в VM
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Установить Python нужной версии
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Кэшировать pip — если requirements.txt не изменился,
+      # пакеты не скачиваются заново, экономит 1-2 минуты
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      # Установить зависимости и запустить тесты
+      - name: Install dependencies and run tests
+        working-directory: booktracker   # все команды выполняются в этой папке
+        env:
+          DATA_FILE: /tmp/test_books.json  # чтобы тесты не писали в /app/data
+          REDIS_HOST: ""                   # отключаем redis в тестах
+        run: |
+          pip install -r requirements.txt
+          pytest tests/ -v
+
+  # ── JOB 2: сборка образа ────────────────────────────────────
+  build:
+    name: Build Docker Image
+    runs-on: ubuntu-latest
+    needs: test              # запускается только если job test прошёл
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Логин в Docker Hub через secrets — никогда не хардкодить пароли
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      # Buildx — продвинутый builder с поддержкой кэширования слоёв
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Собрать образ и запушить на Docker Hub
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./booktracker
+          # пушить только из main — при PR только собираем, не пушим
+          push: ${{ github.ref == 'refs/heads/main' }}
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/booktracker:latest
+            ${{ secrets.DOCKER_USERNAME }}/booktracker:${{ github.sha }}
+          # кэш слоёв Docker между запусками — если код не менялся,
+          # слои берутся из кэша а не пересобираются
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── JOB 3: деплой на сервер ─────────────────────────────────
+  deploy:
+    name: Deploy to Server
+    runs-on: ubuntu-latest
+    needs: build                          # только после успешного build
+    if: github.ref == 'refs/heads/main'   # только из main, не из PR
+
+    steps:
+      # Подключиться по SSH и выполнить команды на сервере
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SERVER_HOST }}      # IP или домен сервера
+          username: ${{ secrets.SERVER_USER }}  # пользователь на сервере
+          key: ${{ secrets.SERVER_SSH_KEY }}    # приватный SSH ключ
+          script: |
+            cd /opt/booktracker
+            docker compose pull               # скачать новый образ с Hub
+            docker compose up -d booktracker  # перезапустить только app
+            docker image prune -f             # удалить старые образы
