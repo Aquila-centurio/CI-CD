@@ -36,10 +36,10 @@ jobs:
             ${{ runner.os }}-pip-
 
       # Установить зависимости и запустить тесты
+      # working-directory убран — файлы лежат в корне репо
       - name: Install dependencies and run tests
-        working-directory: booktracker   # все команды выполняются в этой папке
         env:
-          DATA_FILE: /tmp/test_books.json  # чтобы тесты не писали в /app/data
+          DATA_FILE: /tmp/test_books.json  # тесты не пишут в /app/data
           REDIS_HOST: ""                   # отключаем redis в тестах
         run: |
           pip install -r requirements.txt
@@ -70,7 +70,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
-          context: ./booktracker
+          context: .          # корень репо — Dockerfile здесь
           # пушить только из main — при PR только собираем, не пушим
           push: ${{ github.ref == 'refs/heads/main' }}
           tags: |
