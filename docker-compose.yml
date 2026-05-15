@@ -1,0 +1,64 @@
+services:
+
+  # ── nginx ─────────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"             # единственный сервис открытый наружу
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro  # ro = read-only
+    depends_on:
+      - booktracker         # nginx стартует после booktracker
+    networks:
+      - booknet
+
+  # ── приложение ────────────────────────────────────────
+  booktracker:
+    build:
+      context: .
+      target: runtime
+    env_file:
+      - .env                # все переменные из .env файла
+    depends_on:
+      postgres:
+        condition: service_healthy   # ждём пока postgres реально готов
+      redis:
+        condition: service_started   # redis просто запущен
+    networks:
+      - booknet
+    restart: on-failure
+
+  # ── postgres ──────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: books
+      POSTGRES_USER: bookuser
+      POSTGRES_PASSWORD: secret123
+    volumes:
+      - postgres-data:/var/lib/postgresql/data  # данные живут в volume
+    networks:
+      - booknet
+    healthcheck:
+      # проверяем что postgres реально принимает подключения
+      # depends_on с condition: service_healthy ждёт этого
+      test: ["CMD-SHELL", "pg_isready -U bookuser -d books"]
+      interval: 5s      # проверять каждые 5 секунд
+      timeout: 5s       # таймаут одной проверки
+      retries: 5        # после 5 неудач — считать unhealthy
+
+  # ── redis ─────────────────────────────────────────────
+  redis:
+    image: redis:alpine
+    volumes:
+      - redis-data:/data
+    networks:
+      - booknet
+
+networks:
+  booknet:
+    driver: bridge      # явно указываем тип сети (bridge по умолчанию)
+
+volumes:
+  postgres-data:        # Compose создаст сам
+  redis-data:           # Compose создаст сам

@@ -1,0 +1,61 @@
+services:
+
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - booktracker
+    networks:
+      - booknet
+    restart: always
+
+  booktracker:
+    image: yourname/booktracker:latest
+    env_file:
+      - .env
+    environment:
+      - APP_ENV=production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - booknet
+    restart: always
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: books
+      POSTGRES_USER: bookuser
+      POSTGRES_PASSWORD: secret123
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - booknet
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bookuser -d books"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:alpine
+    volumes:
+      - redis-data:/data
+    networks:
+      - booknet
+    restart: always
+
+networks:
+  booknet:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
